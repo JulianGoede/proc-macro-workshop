@@ -52,7 +52,10 @@ pub fn derive(tokens: TokenStream) -> TokenStream {
         })
         .unzip();
 
-    let ((repeated_field_names, repeated_field_types), single_name): ((Vec<Ident>, Vec<Type>), Vec<Ident>) = struct_fields
+    let ((repeated_field_names, repeated_field_types), single_name): (
+        (Vec<Ident>, Vec<Type>),
+        Vec<Ident>,
+    ) = struct_fields
         .iter()
         .filter(|(field, ..)| get_repeat_token(field).is_some())
         .map(|(field, field_type)| {
@@ -63,9 +66,22 @@ pub fn derive(tokens: TokenStream) -> TokenStream {
                 (field.ident.clone().unwrap(), field.ty.clone())
             };
             (field, token)
-
         })
         .unzip();
+
+    let all_at_once_setter: Vec<proc_macro2::TokenStream> = repeated_field_names
+        .iter()
+        .zip(repeated_field_types.iter())
+        .zip(single_name.iter())
+        .filter(|((field_name, _), item_name)| field_name.to_string() != item_name.to_string())
+        .map( |((field_name, ty), _)|{
+            quote!(
+                pub fn #field_name(&mut self, #field_name: Vec<#ty>) -> &mut Self {
+                    self.#field_name = #field_name;
+                    self
+                }
+            ).into()
+        }).collect();
 
     let setters = quote!(
         #(
@@ -74,6 +90,8 @@ pub fn derive(tokens: TokenStream) -> TokenStream {
                 self
             }
         )
+        *
+        #(#all_at_once_setter)
         *
         #(
             pub fn #option_field_names(&mut self, #option_field_names: #option_field_types) -> &mut Self {
@@ -201,18 +219,17 @@ fn get_repeat_token(field: &Field) -> Option<Ident> {
     for attr in &field.attrs {
         if let syn::Meta::List(meta_list) = &attr.meta {
             let mut tokens = meta_list.tokens.clone().into_iter();
-            if let Some(first_token) = tokens.next(){
+            if let Some(first_token) = tokens.next() {
                 if first_token.to_string() == "each" {
                     if let Some(last_token) = tokens.last() {
                         let name: String = last_token.to_string();
                         if name.len() <= 2 {
                             return None;
                         }
-                        return Some(Ident::new(&name[1..name.len()-1], last_token.span()));
+                        return Some(Ident::new(&name[1..name.len() - 1], last_token.span()));
                     }
-
                 } else {
-                    return None
+                    return None;
                 }
             }
         }

@@ -50,4 +50,15 @@ fn main() {
 
     assert_eq!(command.executable, "cargo");
     assert_eq!(command.args, vec!["build", "--release"]);
+
+    let command = Command::builder()
+        .executable("cargo".to_owned())
+        .args(vec!["build".to_owned(), "--release".to_owned()])
+        .env("HOME".to_owned())
+        .build()
+        .unwrap();
+
+    assert_eq!(command.executable, "cargo");
+    assert_eq!(command.env, vec!["HOME"]);
+    assert_eq!(command.args, vec!["build", "--release"]);
 }
