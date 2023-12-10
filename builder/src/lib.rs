@@ -2,7 +2,9 @@ extern crate proc_macro;
 
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{parse_macro_input, Data::Struct, DeriveInput, Field, GenericArgument, Ident, Type};
+use syn::{
+    parse_macro_input, Data::Struct, DeriveInput, Error, Field, GenericArgument, Ident, Type, spanned::Spanned,
+};
 
 enum FieldType {
     Boring,
@@ -26,9 +28,15 @@ pub fn derive(tokens: TokenStream) -> TokenStream {
 
     let struct_fields = parse_struct_fields(fields);
 
+    for (field, ..) in struct_fields.iter() {
+        if let Err(e) = get_repeat_token(field) {
+            return Error::into_compile_error(e).into();
+        }
+    }
+
     let (requried_field_names, requried_field_types): (Vec<Ident>, Vec<Type>) = struct_fields
         .iter()
-        .filter(|(field, ..)| get_repeat_token(field).is_none())
+        .filter(|(field, ..)| get_repeat_token(field).unwrap().is_none())
         .filter(|(.., option_type)| match option_type {
             FieldType::Boring => true,
             FieldType::Vec(_) => true,
@@ -38,7 +46,7 @@ pub fn derive(tokens: TokenStream) -> TokenStream {
         .unzip();
     let (option_field_names, option_field_types): (Vec<Ident>, Vec<Type>) = struct_fields
         .iter()
-        .filter(|(field, ..)| get_repeat_token(field).is_none())
+        .filter(|(field, ..)| get_repeat_token(field).unwrap().is_none())
         .filter(|(.., option_type)| match option_type {
             FieldType::Option(_) => true,
             _ => false,
@@ -57,9 +65,9 @@ pub fn derive(tokens: TokenStream) -> TokenStream {
         Vec<Ident>,
     ) = struct_fields
         .iter()
-        .filter(|(field, ..)| get_repeat_token(field).is_some())
+        .filter(|(field, ..)| get_repeat_token(field).unwrap().is_some())
         .map(|(field, field_type)| {
-            let token = get_repeat_token(field).unwrap();
+            let token = get_repeat_token(field).unwrap().unwrap();
             let field: (Ident, Type) = if let FieldType::Vec(inner_type) = field_type {
                 (field.ident.clone().unwrap(), inner_type.clone())
             } else {
@@ -74,14 +82,16 @@ pub fn derive(tokens: TokenStream) -> TokenStream {
         .zip(repeated_field_types.iter())
         .zip(single_name.iter())
         .filter(|((field_name, _), item_name)| field_name.to_string() != item_name.to_string())
-        .map( |((field_name, ty), _)|{
+        .map(|((field_name, ty), _)| {
             quote!(
                 pub fn #field_name(&mut self, #field_name: Vec<#ty>) -> &mut Self {
                     self.#field_name = #field_name;
                     self
                 }
-            ).into()
-        }).collect();
+            )
+            .into()
+        })
+        .collect();
 
     let setters = quote!(
         #(
@@ -215,7 +225,20 @@ fn parse_struct_fields(fields: syn::DataStruct) -> Vec<(Field, FieldType)> {
     struct_fields
 }
 
-fn get_repeat_token(field: &Field) -> Option<Ident> {
+// fn join_spans(span_1: proc_macro2::Span, span_2: proc_macro2::Span) -> proc_macro2::Span {
+//     let start_1 = span_1.start();
+//     let end_1 = span_1.end();
+//     let start_2 = span_2.start();
+//     let end_2 = span_2.end();
+//
+//     let min_start = if start_1 < start_2 { start_1 } else { start_2 };
+//     let max_end = if end_1 > end_2 { end_1 } else { end_2 };
+//
+//     proc_macro2::Span::new(min_start.line, min_start.column, max_end.line, max_end.column, None)
+// }
+
+
+fn get_repeat_token(field: &Field) -> syn::Result<Option<Ident>> {
     for attr in &field.attrs {
         if let syn::Meta::List(meta_list) = &attr.meta {
             let mut tokens = meta_list.tokens.clone().into_iter();
@@ -224,15 +247,21 @@ fn get_repeat_token(field: &Field) -> Option<Ident> {
                     if let Some(last_token) = tokens.last() {
                         let name: String = last_token.to_string();
                         if name.len() <= 2 {
-                            return None;
+                            return Err(syn::Error::new(
+                                first_token.span(),
+                                "field name was not provided",
+                            ));
                         }
-                        return Some(Ident::new(&name[1..name.len() - 1], last_token.span()));
+                        return Ok(Some(Ident::new(
+                            &name[1..name.len() - 1],
+                            last_token.span(),
+                        )));
                     }
                 } else {
-                    return None;
+                    return Err(syn::Error::new_spanned(attr.meta.clone(), "expected `builder(each = \"...\")`"));
                 }
             }
         }
     }
-    return None;
+    return Ok(None);
 }
