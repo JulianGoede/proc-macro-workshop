@@ -2,9 +2,7 @@ extern crate proc_macro;
 
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{
-    parse_macro_input, Data::Struct, DeriveInput, Error, Field, GenericArgument, Ident, Type, spanned::Spanned,
-};
+use syn::{parse_macro_input, Data::Struct, DeriveInput, Field, GenericArgument, Ident, Type};
 
 enum FieldType {
     Boring,
@@ -14,6 +12,7 @@ enum FieldType {
 
 #[proc_macro_derive(Builder, attributes(builder))]
 pub fn derive(tokens: TokenStream) -> TokenStream {
+    
     let input = parse_macro_input!(tokens as DeriveInput);
     // eprintln!("INPUT: {:#?}", input);
     let struct_name = input.ident;
@@ -29,8 +28,8 @@ pub fn derive(tokens: TokenStream) -> TokenStream {
     let struct_fields = parse_struct_fields(fields);
 
     for (field, ..) in struct_fields.iter() {
-        if let Err(e) = get_repeat_token(field) {
-            return Error::into_compile_error(e).into();
+        if let std::result::Result::Err(e) = get_repeat_token(field) {
+            return syn::Error::into_compile_error(e).into();
         }
     }
 
@@ -121,9 +120,9 @@ pub fn derive(tokens: TokenStream) -> TokenStream {
 
     let builder_struct_def = quote!(
         #vis struct #builder_name {
-            #(#requried_field_names: Option<#requried_field_types>,)*
+            #(#requried_field_names: std::option::Option<#requried_field_types>,)*
             #(#repeated_field_names: Vec<#repeated_field_types>,)*
-            #(#option_field_names: Option<#option_field_types>,)*
+            #(#option_field_names: std::option::Option<#option_field_types>,)*
         }
     );
 
@@ -151,7 +150,7 @@ pub fn derive(tokens: TokenStream) -> TokenStream {
     let assert_required_fields_are_set = quote!(
         #(
             if self.#requried_field_names.is_none() {
-                return Err(#error_msg.into());
+                return std::result::Result::Err(#error_msg.into());
             }
         )*
     );
@@ -159,9 +158,9 @@ pub fn derive(tokens: TokenStream) -> TokenStream {
     let builder_impl = quote!(
         impl #builder_name {
             #setters
-            pub fn build(&mut self) -> Result<#struct_name, Box<dyn std::error::Error>> {
+            pub fn build(&mut self) -> std::result::Result<#struct_name, std::boxed::Box<dyn std::error::Error>> {
                 #assert_required_fields_are_set
-                Ok(#struct_name{
+                std::result::Result::Ok(#struct_name{
                     #(#requried_field_names: self.#requried_field_names.clone().unwrap(),)*
                     #(#repeated_field_names: self.#repeated_field_names.clone(),)*
                     #(#option_field_names: if self.#option_field_names.is_some() {Some(self.#option_field_names.clone().unwrap())} else {None},)*
@@ -190,7 +189,7 @@ fn parse_struct_fields(fields: syn::DataStruct) -> Vec<(Field, FieldType)> {
                 .map(|field| {
                     let ty: Type = field.ty.clone();
                     if let Type::Path(ref p) = ty {
-                        let outer_type: Option<&syn::PathSegment> = p.path.segments.iter().next();
+                        let outer_type: std::option::Option<&syn::PathSegment> = p.path.segments.iter().next();
                         if outer_type.is_none()
                             || (outer_type.unwrap().ident != "Option"
                                 && outer_type.unwrap().ident != "Vec")
@@ -204,7 +203,7 @@ fn parse_struct_fields(fields: syn::DataStruct) -> Vec<(Field, FieldType)> {
                             }
                             syn::PathArguments::AngleBracketed(args) => {
                                 // return Some(syn::PathArguments::AngleBracketed(args.clone()))
-                                if let Some(GenericArgument::Type(t)) = args.args.first() {
+                                if let std::option::Option::Some(GenericArgument::Type(t)) = args.args.first() {
                                     if outer_type.ident == "Vec" {
                                         return (field.clone(), FieldType::Vec(t.clone()));
                                     }
@@ -225,43 +224,34 @@ fn parse_struct_fields(fields: syn::DataStruct) -> Vec<(Field, FieldType)> {
     struct_fields
 }
 
-// fn join_spans(span_1: proc_macro2::Span, span_2: proc_macro2::Span) -> proc_macro2::Span {
-//     let start_1 = span_1.start();
-//     let end_1 = span_1.end();
-//     let start_2 = span_2.start();
-//     let end_2 = span_2.end();
-//
-//     let min_start = if start_1 < start_2 { start_1 } else { start_2 };
-//     let max_end = if end_1 > end_2 { end_1 } else { end_2 };
-//
-//     proc_macro2::Span::new(min_start.line, min_start.column, max_end.line, max_end.column, None)
-// }
 
-
-fn get_repeat_token(field: &Field) -> syn::Result<Option<Ident>> {
+fn get_repeat_token(field: &Field) -> syn::Result<std::option::Option<Ident>> {
     for attr in &field.attrs {
         if let syn::Meta::List(meta_list) = &attr.meta {
             let mut tokens = meta_list.tokens.clone().into_iter();
-            if let Some(first_token) = tokens.next() {
+            if let std::option::Option::Some(first_token) = tokens.next() {
                 if first_token.to_string() == "each" {
-                    if let Some(last_token) = tokens.last() {
+                    if let std::option::Option::Some(last_token) = tokens.last() {
                         let name: String = last_token.to_string();
                         if name.len() <= 2 {
-                            return Err(syn::Error::new(
+                            return std::result::Result::Err(syn::Error::new(
                                 first_token.span(),
                                 "field name was not provided",
                             ));
                         }
-                        return Ok(Some(Ident::new(
+                        return syn::Result::Ok(std::option::Option::Some(Ident::new(
                             &name[1..name.len() - 1],
                             last_token.span(),
                         )));
                     }
                 } else {
-                    return Err(syn::Error::new_spanned(attr.meta.clone(), "expected `builder(each = \"...\")`"));
+                    return std::result::Result::Err(syn::Error::new_spanned(
+                        attr.meta.clone(),
+                        "expected `builder(each = \"...\")`",
+                    ));
                 }
             }
         }
     }
-    return Ok(None);
+    return syn::Result::Ok(None);
 }
